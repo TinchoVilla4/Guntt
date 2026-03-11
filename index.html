@@ -74,12 +74,12 @@
         <div class="modal-content">
             <h3 id="modalTitulo">Nombre de Tarea</h3>
             <div class="modal-info">
-                <p><strong>Fechas:</strong> <span id="modalFechas"></span></p>
+                <p><strong>ID:</strong> <span id="modalId"></span></p> <p><strong>Fechas:</strong> <span id="modalFechas"></span></p>
                 <p><strong>Margen:</strong> <span id="modalMargen"></span> días</p>
             </div>
             <a id="modalLinkBtn" href="#" target="_blank" class="modal-enlace" style="display:none;">Ir al Documento / Link</a>
             <div class="modal-botones">
-                <button onclick="cerrarModal()" style="background:#7f8c8d;">Cerrar</button>
+                <button id="btnCerrarModal" style="background:#7f8c8d;">Cerrar</button>
                 <button id="btnEliminarTarea" class="peligro">Eliminar Tarea</button>
             </div>
         </div>
@@ -98,8 +98,7 @@
   messagingSenderId: "627368123808",
   appId: "1:627368123808:web:196ac231052aa4782d18c5",
   measurementId: "G-0SML2ZBG5Y"
-        };
-
+};
         // ===============================================
 
         const app = initializeApp(firebaseConfig);
@@ -107,9 +106,9 @@
 
         let tareas = [];
         let chartReady = false;
-        let chartData = null; // Para poder identificar qué tarea se clica
+        let chartData = null; 
+        let ganttChartObj = null; // Variable global para controlar el gráfico y sus selecciones
 
-        // Configuración absoluta de colores (Sólidos para tarea, Pastel para margen)
         const mapaColores = {
             "Critica": { color: "#ef553b" }, "Critica_slack": { color: "#f5b7b1" },
             "Alta": { color: "#ffa15a" }, "Alta_slack": { color: "#fad7a1" },
@@ -148,15 +147,21 @@
             document.getElementById('taskSlack').value = '0';
         });
 
-        // Función global para cerrar el modal desde HTML
-        window.cerrarModal = () => { document.getElementById('modalTarea').style.display = 'none'; };
+        // Lógica para cerrar el modal y quitar el color negro (limpiar selección)
+        document.getElementById('btnCerrarModal').addEventListener('click', () => {
+            document.getElementById('modalTarea').style.display = 'none';
+            if (ganttChartObj) {
+                ganttChartObj.setSelection([]); // Esto quita el highlight negro de la tarea
+            }
+        });
 
         let idTareaActivaParaBorrar = null;
 
         document.getElementById('btnEliminarTarea').addEventListener('click', async () => {
             if(idTareaActivaParaBorrar && confirm("¿Eliminar esta tarea definitivamente?")) {
                 await deleteDoc(doc(db, "tareas_mision", idTareaActivaParaBorrar));
-                window.cerrarModal();
+                document.getElementById('modalTarea').style.display = 'none';
+                if (ganttChartObj) ganttChartObj.setSelection([]);
             }
         });
 
@@ -183,13 +188,15 @@
                 const fechaInicio = new Date(t.inicio + "T00:00:00"); 
                 const fechaFinOriginal = new Date(t.fin + "T00:00:00");
 
-                // Garantizar el orden de los colores registrando las prioridades a medida que aparecen
                 if(!recursosUsados.includes(t.prioridad)) recursosUsados.push(t.prioridad);
 
-                // Fila de la tarea real
-                filas.push([ t.id, t.nombre, t.prioridad, fechaInicio, fechaFinOriginal, null, 0, null ]);
+                // Aquí concatenamos el ID con el nombre para que se vea en el gráfico
+                const nombreVisible = `${t.id}: ${t.nombre}`;
 
-                // Si hay margen de tiempo (Slack), creamos un bloque secundario atado al principal
+                // Fila de la tarea real
+                filas.push([ t.id, nombreVisible, t.prioridad, fechaInicio, fechaFinOriginal, null, 0, null ]);
+
+                // Fila del Margen (Slack)
                 if (t.slack > 0) {
                     const fechaFinConMargen = new Date(fechaFinOriginal.getTime() + (t.slack * 24 * 60 * 60 * 1000));
                     const recursoSlack = t.prioridad + "_slack";
@@ -202,25 +209,22 @@
 
             chartData.addRows(filas);
 
-            // Generar la paleta de colores exactamente en el orden en que Google la necesita
             const paletaDinamica = recursosUsados.map(r => mapaColores[r]);
-
             const options = { height: 500, gantt: { trackHeight: 30, palette: paletaDinamica } };
-            const chart = new google.visualization.Gantt(document.getElementById('gantt_div'));
             
-            // Lógica para detectar el clic en la barra
-            google.visualization.events.addListener(chart, 'select', () => {
-                const selection = chart.getSelection();
+            ganttChartObj = new google.visualization.Gantt(document.getElementById('gantt_div'));
+            
+            google.visualization.events.addListener(ganttChartObj, 'select', () => {
+                const selection = ganttChartObj.getSelection();
                 if (selection.length > 0) {
                     let clickedId = chartData.getValue(selection[0].row, 0);
-                    // Si clicaron en el margen, identificar la tarea madre
                     if (clickedId.endsWith('_slack')) clickedId = clickedId.replace('_slack', '');
                     
                     abrirModalDetalle(clickedId);
                 }
             });
 
-            chart.draw(chartData, options);
+            ganttChartObj.draw(chartData, options);
         }
 
         function abrirModalDetalle(id) {
@@ -229,6 +233,7 @@
 
             idTareaActivaParaBorrar = id;
             document.getElementById('modalTitulo').innerText = tarea.nombre;
+            document.getElementById('modalId').innerText = tarea.id; // Mostramos el ID en el modal
             document.getElementById('modalFechas').innerText = `${tarea.inicio} hasta ${tarea.fin}`;
             document.getElementById('modalMargen').innerText = tarea.slack || 0;
             
