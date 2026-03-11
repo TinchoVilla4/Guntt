@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Gantt Interactivo - Proyecto Integrador</title>
+    <title>Gantt Interactivo - Misión Masa Líquida</title>
     <script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; margin: 20px; }
@@ -15,7 +15,16 @@
         button:hover { background-color: #3498db; }
         button.peligro { background-color: #e74c3c; }
         button.peligro:hover { background-color: #c0392b; }
-        #gantt_div { width: 100%; height: 500px; background: white; padding: 10px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        #gantt_div { width: 100%; height: 500px; background: white; padding: 10px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); cursor: pointer; }
+        
+        /* Estilos de la ventana emergente (Modal) */
+        .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center; }
+        .modal-content { background: white; padding: 25px; border-radius: 8px; width: 350px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); text-align: center; }
+        .modal-content h3 { margin-top: 0; color: #2c3e50; }
+        .modal-info { text-align: left; margin: 15px 0; font-size: 14px; color: #34495e; }
+        .modal-enlace { display: inline-block; margin: 10px 0; padding: 8px 15px; background: #27ae60; color: white; text-decoration: none; border-radius: 4px; font-weight: bold; }
+        .modal-enlace:hover { background: #2ecc71; }
+        .modal-botones { display: flex; justify-content: space-between; margin-top: 20px; }
     </style>
 </head>
 <body>
@@ -40,7 +49,7 @@
             <input type="date" id="taskEnd">
         </div>
         <div class="grupo-input">
-            <label>Prioridad (Color)</label>
+            <label>Prioridad</label>
             <select id="taskPriority">
                 <option value="Critica">Crítica (Rojo)</option>
                 <option value="Alta">Alta (Naranja)</option>
@@ -49,128 +58,189 @@
             </select>
         </div>
         <div class="grupo-input">
-            <label>Margen / Slack (Días)</label>
-            <input type="number" id="taskSlack" value="0" min="0">
+            <label>Margen (Días)</label>
+            <input type="number" id="taskSlack" value="0" min="0" style="width: 70px;">
         </div>
-        <button onclick="agregarTarea()">Agregar / Actualizar Tarea</button>
-        <button class="peligro" onclick="limpiarTareas()">Borrar Todo</button>
+        <div class="grupo-input">
+            <label>Enlace / Link (Opcional)</label>
+            <input type="url" id="taskLink" placeholder="https://docs.google.com/..." style="width: 200px;">
+        </div>
+        <button id="btnAgregar">Agregar / Actualizar</button>
     </div>
 
     <div id="gantt_div"></div>
 
-    <script>
-        google.charts.load('current', {'packages':['gantt']});
-        google.charts.setOnLoadCallback(inicializar);
+    <div id="modalTarea" class="modal-overlay">
+        <div class="modal-content">
+            <h3 id="modalTitulo">Nombre de Tarea</h3>
+            <div class="modal-info">
+                <p><strong>Fechas:</strong> <span id="modalFechas"></span></p>
+                <p><strong>Margen:</strong> <span id="modalMargen"></span> días</p>
+            </div>
+            <a id="modalLinkBtn" href="#" target="_blank" class="modal-enlace" style="display:none;">Ir al Documento / Link</a>
+            <div class="modal-botones">
+                <button onclick="cerrarModal()" style="background:#7f8c8d;">Cerrar</button>
+                <button id="btnEliminarTarea" class="peligro">Eliminar Tarea</button>
+            </div>
+        </div>
+    </div>
 
-        // Variables globales
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
+        import { getFirestore, collection, onSnapshot, deleteDoc, doc, setDoc } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
+
+        // === PEGA TU CONFIGURACIÓN DE FIREBASE AQUÍ ===
+        const firebaseConfig = {
+  apiKey: "AIzaSyBuvfgmSajhahjRLTEcmvPEFcnmOlBRsXQ",
+  authDomain: "gunnt-1d1d5.firebaseapp.com",
+  projectId: "gunnt-1d1d5",
+  storageBucket: "gunnt-1d1d5.firebasestorage.app",
+  messagingSenderId: "627368123808",
+  appId: "1:627368123808:web:196ac231052aa4782d18c5",
+  measurementId: "G-0SML2ZBG5Y"
+        };
+
+        // ===============================================
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
         let tareas = [];
+        let chartReady = false;
+        let chartData = null; // Para poder identificar qué tarea se clica
 
-        function inicializar() {
-            // Cargar tareas guardadas en el navegador
-            const tareasGuardadas = localStorage.getItem('tareasMision');
-            if (tareasGuardadas) {
-                tareas = JSON.parse(tareasGuardadas);
-            } else {
-                // Tarea de ejemplo si está vacío
-                tareas = [{
-                    id: 'MCR', nombre: 'Revisión del Concepto (MCR)',
-                    inicio: '2026-03-25', fin: '2026-03-27',
-                    prioridad: 'Hito', slack: 0
-                }];
-            }
-            dibujarGrafico();
-        }
+        // Configuración absoluta de colores (Sólidos para tarea, Pastel para margen)
+        const mapaColores = {
+            "Critica": { color: "#ef553b" }, "Critica_slack": { color: "#f5b7b1" },
+            "Alta": { color: "#ffa15a" }, "Alta_slack": { color: "#fad7a1" },
+            "Media": { color: "#00cc96" }, "Media_slack": { color: "#a9dfbf" },
+            "Hito": { color: "#ab63fa" }, "Hito_slack": { color: "#d7bde2" }
+        };
 
-        function agregarTarea() {
+        google.charts.load('current', {'packages':['gantt']});
+        google.charts.setOnLoadCallback(() => {
+            chartReady = true;
+            if(tareas.length > 0) dibujarGrafico();
+        });
+
+        onSnapshot(collection(db, "tareas_mision"), (snapshot) => {
+            tareas = [];
+            snapshot.forEach((doc) => { tareas.push(doc.data()); });
+            if(chartReady) dibujarGrafico();
+        });
+
+        document.getElementById('btnAgregar').addEventListener('click', async () => {
             const id = document.getElementById('taskId').value;
             const nombre = document.getElementById('taskName').value;
             const inicio = document.getElementById('taskStart').value;
             const fin = document.getElementById('taskEnd').value;
             const prioridad = document.getElementById('taskPriority').value;
-            const slack = parseInt(document.getElementById('taskSlack').value);
+            const slack = parseInt(document.getElementById('taskSlack').value) || 0;
+            const link = document.getElementById('taskLink').value;
 
-            if (!id || !nombre || !inicio || !fin) {
-                alert("Por favor, completa el ID, Nombre, Inicio y Fin.");
+            if (!id || !nombre || !inicio || !fin) { alert("Faltan datos obligatorios."); return; }
+
+            await setDoc(doc(db, "tareas_mision", id), { id, nombre, inicio, fin, prioridad, slack, link });
+            
+            document.getElementById('taskId').value = '';
+            document.getElementById('taskName').value = '';
+            document.getElementById('taskLink').value = '';
+            document.getElementById('taskSlack').value = '0';
+        });
+
+        // Función global para cerrar el modal desde HTML
+        window.cerrarModal = () => { document.getElementById('modalTarea').style.display = 'none'; };
+
+        let idTareaActivaParaBorrar = null;
+
+        document.getElementById('btnEliminarTarea').addEventListener('click', async () => {
+            if(idTareaActivaParaBorrar && confirm("¿Eliminar esta tarea definitivamente?")) {
+                await deleteDoc(doc(db, "tareas_mision", idTareaActivaParaBorrar));
+                window.cerrarModal();
+            }
+        });
+
+        function dibujarGrafico() {
+            if (tareas.length === 0) {
+                document.getElementById('gantt_div').innerHTML = "<p style='text-align:center; padding-top:200px; color:#7f8c8d;'>No hay tareas. Agrega la primera arriba.</p>";
                 return;
             }
 
-            // Crear el objeto de la tarea
-            const nuevaTarea = { id, nombre, inicio, fin, prioridad, slack };
+            chartData = new google.visualization.DataTable();
+            chartData.addColumn('string', 'Task ID');
+            chartData.addColumn('string', 'Task Name');
+            chartData.addColumn('string', 'Resource');
+            chartData.addColumn('date', 'Start Date');
+            chartData.addColumn('date', 'End Date');
+            chartData.addColumn('number', 'Duration');
+            chartData.addColumn('number', 'Percent Complete');
+            chartData.addColumn('string', 'Dependencies');
 
-            // Revisar si la tarea ya existe para actualizarla, o agregarla si es nueva
-            const index = tareas.findIndex(t => t.id === id);
-            if (index !== -1) {
-                tareas[index] = nuevaTarea;
-            } else {
-                tareas.push(nuevaTarea);
-            }
+            let recursosUsados = [];
+            const filas = [];
 
-            // Guardar en el navegador y redibujar
-            localStorage.setItem('tareasMision', JSON.stringify(tareas));
-            dibujarGrafico();
-        }
+            tareas.forEach(t => {
+                const fechaInicio = new Date(t.inicio + "T00:00:00"); 
+                const fechaFinOriginal = new Date(t.fin + "T00:00:00");
 
-        function limpiarTareas() {
-            if(confirm("¿Seguro que quieres borrar todas las tareas del proyecto?")) {
-                tareas = [];
-                localStorage.removeItem('tareasMision');
-                dibujarGrafico();
-            }
-        }
+                // Garantizar el orden de los colores registrando las prioridades a medida que aparecen
+                if(!recursosUsados.includes(t.prioridad)) recursosUsados.push(t.prioridad);
 
-        function dibujarGrafico() {
-            const data = new google.visualization.DataTable();
-            data.addColumn('string', 'Task ID');
-            data.addColumn('string', 'Task Name');
-            data.addColumn('string', 'Resource'); // Usamos esto para la prioridad/color
-            data.addColumn('date', 'Start Date');
-            data.addColumn('date', 'End Date');
-            data.addColumn('number', 'Duration');
-            data.addColumn('number', 'Percent Complete');
-            data.addColumn('string', 'Dependencies');
+                // Fila de la tarea real
+                filas.push([ t.id, t.nombre, t.prioridad, fechaInicio, fechaFinOriginal, null, 0, null ]);
 
-            // Convertir nuestras tareas al formato que exige Google Charts
-            const filas = tareas.map(t => {
-                // Sumamos el slack (margen) convirtiendo días a milisegundos
-                const fechaFinOriginal = new Date(t.fin);
-                const fechaFinConMargen = new Date(fechaFinOriginal.getTime() + (t.slack * 24 * 60 * 60 * 1000));
+                // Si hay margen de tiempo (Slack), creamos un bloque secundario atado al principal
+                if (t.slack > 0) {
+                    const fechaFinConMargen = new Date(fechaFinOriginal.getTime() + (t.slack * 24 * 60 * 60 * 1000));
+                    const recursoSlack = t.prioridad + "_slack";
+                    
+                    if(!recursosUsados.includes(recursoSlack)) recursosUsados.push(recursoSlack);
 
-                return [
-                    t.id, 
-                    t.nombre + (t.slack > 0 ? ` (+${t.slack}d margen)` : ''), 
-                    t.prioridad, 
-                    new Date(t.inicio), 
-                    fechaFinConMargen, 
-                    null, 
-                    0, 
-                    null
-                ];
+                    filas.push([ t.id + "_slack", "Margen (" + t.slack + "d)", recursoSlack, fechaFinOriginal, fechaFinConMargen, null, 0, t.id ]);
+                }
             });
 
-            data.addRows(filas);
+            chartData.addRows(filas);
 
-            const options = {
-                height: 500,
-                gantt: {
-                    trackHeight: 30,
-                    // Definimos colores fijos para las prioridades (Resources)
-                    palette: [
-                        { "color": "#ef553b", "dark": "#c0392b", "light": "#e74c3c" }, // Critica
-                        { "color": "#ffa15a", "dark": "#e67e22", "light": "#f39c12" }, // Alta
-                        { "color": "#00cc96", "dark": "#27ae60", "light": "#2ecc71" }, // Media
-                        { "color": "#ab63fa", "dark": "#8e44ad", "light": "#9b59b6" }  // Hito
-                    ]
-                }
-            };
+            // Generar la paleta de colores exactamente en el orden en que Google la necesita
+            const paletaDinamica = recursosUsados.map(r => mapaColores[r]);
 
+            const options = { height: 500, gantt: { trackHeight: 30, palette: paletaDinamica } };
             const chart = new google.visualization.Gantt(document.getElementById('gantt_div'));
             
-            // Si no hay tareas, evitamos que Google Charts tire error
-            if(tareas.length > 0) {
-                chart.draw(data, options);
+            // Lógica para detectar el clic en la barra
+            google.visualization.events.addListener(chart, 'select', () => {
+                const selection = chart.getSelection();
+                if (selection.length > 0) {
+                    let clickedId = chartData.getValue(selection[0].row, 0);
+                    // Si clicaron en el margen, identificar la tarea madre
+                    if (clickedId.endsWith('_slack')) clickedId = clickedId.replace('_slack', '');
+                    
+                    abrirModalDetalle(clickedId);
+                }
+            });
+
+            chart.draw(chartData, options);
+        }
+
+        function abrirModalDetalle(id) {
+            const tarea = tareas.find(t => t.id === id);
+            if(!tarea) return;
+
+            idTareaActivaParaBorrar = id;
+            document.getElementById('modalTitulo').innerText = tarea.nombre;
+            document.getElementById('modalFechas').innerText = `${tarea.inicio} hasta ${tarea.fin}`;
+            document.getElementById('modalMargen').innerText = tarea.slack || 0;
+            
+            const linkBtn = document.getElementById('modalLinkBtn');
+            if(tarea.link && tarea.link.startsWith("http")) {
+                linkBtn.href = tarea.link;
+                linkBtn.style.display = "inline-block";
             } else {
-                document.getElementById('gantt_div').innerHTML = "<p style='text-align:center; padding-top:200px; color:#7f8c8d;'>No hay tareas. Agrega una desde el panel superior.</p>";
+                linkBtn.style.display = "none";
             }
+
+            document.getElementById('modalTarea').style.display = 'flex';
         }
     </script>
 </body>
