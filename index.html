@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Gantt Interactivo</title>
+    <title>Gantt Interactivo - Misión Titan Turtle</title>
     <script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; margin: 20px; }
@@ -47,7 +47,7 @@
             <input type="date" id="taskStart">
         </div>
         <div class="grupo-input">
-            <label>Fin</label>
+            <label>Fin (Igual a Inicio para Hitos)</label>
             <input type="date" id="taskEnd">
         </div>
         <div class="grupo-input">
@@ -123,7 +123,6 @@
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
-        // IMPORTANTE: Agregué 'updateDoc' a las importaciones
         import { getFirestore, collection, onSnapshot, deleteDoc, doc, setDoc, updateDoc } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
 
         // === CONFIGURACIÓN DE FIREBASE ORIGINAL ===
@@ -145,7 +144,7 @@
         let chartReady = false;
         let chartData = null; 
         let ganttChartObj = null;
-        let idTareaActiva = null; // Variable para saber qué tarea estamos editando
+        let idTareaActiva = null; 
 
         const mapaColores = {
             "Critica": { color: "#d32f2f" }, "Critica_slack": { color: "#ef9a9a" },
@@ -166,9 +165,8 @@
             if(chartReady) dibujarGrafico();
         });
 
-        // --- CREAR NUEVA TAREA (Panel Superior) ---
+        // --- CREAR NUEVA TAREA ---
         document.getElementById('btnAgregar').addEventListener('click', async () => {
-            // Generamos un ID interno único automáticamente
             const id = "T-" + Date.now(); 
             const nombre = document.getElementById('taskName').value;
             const inicio = document.getElementById('taskStart').value;
@@ -178,10 +176,15 @@
             const link = document.getElementById('taskLink').value;
 
             if (!nombre || !inicio || !fin) { alert("Faltan datos obligatorios (Nombre, Inicio, Fin)."); return; }
+            
+            // VALIDACIÓN TEMPORAL ANTES DE GUARDAR
+            if (new Date(inicio) > new Date(fin)) {
+                alert("Anomalía temporal detectada: La fecha de inicio no puede ser posterior a la fecha de fin.");
+                return;
+            }
 
             await setDoc(doc(db, "tareas_mision", id), { id, nombre, inicio, fin, prioridad, slack, link });
             
-            // Limpiar campos
             document.getElementById('taskName').value = '';
             document.getElementById('taskStart').value = '';
             document.getElementById('taskEnd').value = '';
@@ -210,16 +213,16 @@
 
             if (!nombre || !inicio || !fin) { alert("Faltan datos obligatorios."); return; }
             
+            // VALIDACIÓN TEMPORAL MOVIDA AQUÍ, ANTES DEL UPDATE
+            if (new Date(inicio) > new Date(fin)) {
+                alert("Anomalía temporal detectada: La fecha de inicio no puede ser posterior a la fecha de fin.");
+                return;
+            }
 
-            // Usamos updateDoc para actualizar solo los campos en la base de datos
             await updateDoc(doc(db, "tareas_mision", idTareaActiva), { 
                 nombre, inicio, fin, prioridad, slack, link 
             });
-// Agrega esto justo después de obtener 'inicio' y 'fin' en los botones de Agregar y Guardar:
-if (new Date(inicio) > new Date(fin)) {
-    alert("Anomalía temporal detectada: La fecha de inicio no puede ser posterior a la fecha de fin.");
-    return;
-}
+
             document.getElementById('modalTarea').style.display = 'none';
             if (ganttChartObj) ganttChartObj.setSelection([]);
             idTareaActiva = null;
@@ -257,21 +260,20 @@ if (new Date(inicio) > new Date(fin)) {
             tareas.forEach(t => {
                 const fechaInicio = new Date(t.inicio + "T00:00:00"); 
                 let fechaFinOriginal = new Date(t.fin + "T00:00:00");
-                let duracionPrincipal = null; // Por defecto la calcula Google con las dos fechas
+                let duracionPrincipal = null; 
 
                 if(!recursosUsados.includes(t.prioridad)) recursosUsados.push(t.prioridad);
 
-                // --- FIX PARA LOS HITOS (ROMBOS) ---
-                // Si la fecha de inicio es igual a la de fin, forzamos el formato de Hito
+                // --- FIX DEFINITIVO PARA LOS HITOS (ROMBOS) ---
+                // Le pasamos exactamente la misma fecha a Google y dejamos duración nula.
                 if (t.inicio === t.fin) {
-                    fechaFinOriginal = null; // Anulamos la fecha de fin
-                    duracionPrincipal = 0;   // Forzamos la duración a 0 milisegundos
+                    fechaFinOriginal = new Date(fechaInicio.getTime()); 
+                    duracionPrincipal = null; 
                 }
 
-                // Tarea principal (Ahora acepta el rombo si duracionPrincipal es 0)
                 filas.push([ t.id, t.nombre, t.prioridad, fechaInicio, fechaFinOriginal, duracionPrincipal, 0, null ]);
 
-                // Lógica del margen (intacta)
+                // Lógica del margen
                 if (t.slack > 0) {
                     const recursoSlack = t.prioridad + "_slack";
                     if(!recursosUsados.includes(recursoSlack)) recursosUsados.push(recursoSlack);
@@ -286,7 +288,6 @@ if (new Date(inicio) > new Date(fin)) {
             const paletaDinamica = recursosUsados.map(r => mapaColores[r] ? mapaColores[r].color : '#333');
             const options = { height: 500, gantt: { trackHeight: 30, palette: paletaDinamica } };
             
-            // Reutilizamos la instancia del gráfico para evitar fugas de memoria y glitches de escala
             if (!ganttChartObj) {
                 ganttChartObj = new google.visualization.Gantt(document.getElementById('gantt_div'));
                 
@@ -309,7 +310,6 @@ if (new Date(inicio) > new Date(fin)) {
 
             idTareaActiva = id;
             
-            // Rellenar los inputs del modal con los datos actuales
             document.getElementById('editName').value = tarea.nombre;
             document.getElementById('editStart').value = tarea.inicio;
             document.getElementById('editEnd').value = tarea.fin;
@@ -317,7 +317,6 @@ if (new Date(inicio) > new Date(fin)) {
             document.getElementById('editSlack').value = tarea.slack || 0;
             document.getElementById('editLink').value = tarea.link || '';
             
-            // Manejar el enlace de apertura rápida si existe un link
             const btnAbrir = document.getElementById('btnAbrirLink');
             if(tarea.link && tarea.link.startsWith("http")) {
                 btnAbrir.href = tarea.link;
