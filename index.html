@@ -35,7 +35,7 @@
 </head>
 <body>
 
-    <h2>Planificación de Misión Espacial (Titan Turtle)</h2>
+    <h2>Planificación de Misión Espacial</h2>
 
     <div class="panel-control">
         <div class="grupo-input">
@@ -209,12 +209,17 @@
             const link = document.getElementById('editLink').value;
 
             if (!nombre || !inicio || !fin) { alert("Faltan datos obligatorios."); return; }
+            
 
             // Usamos updateDoc para actualizar solo los campos en la base de datos
             await updateDoc(doc(db, "tareas_mision", idTareaActiva), { 
                 nombre, inicio, fin, prioridad, slack, link 
             });
-
+// Agrega esto justo después de obtener 'inicio' y 'fin' en los botones de Agregar y Guardar:
+if (new Date(inicio) > new Date(fin)) {
+    alert("Anomalía temporal detectada: La fecha de inicio no puede ser posterior a la fecha de fin.");
+    return;
+}
             document.getElementById('modalTarea').style.display = 'none';
             if (ganttChartObj) ganttChartObj.setSelection([]);
             idTareaActiva = null;
@@ -255,16 +260,17 @@
 
                 if(!recursosUsados.includes(t.prioridad)) recursosUsados.push(t.prioridad);
 
-                // Solo mostramos el nombre en el gráfico, ocultando el ID generado
+                // Tarea principal
                 filas.push([ t.id, t.nombre, t.prioridad, fechaInicio, fechaFinOriginal, null, 0, null ]);
 
                 if (t.slack > 0) {
-                    const fechaFinConMargen = new Date(fechaFinOriginal.getTime() + (t.slack * 24 * 60 * 60 * 1000));
                     const recursoSlack = t.prioridad + "_slack";
-                    
                     if(!recursosUsados.includes(recursoSlack)) recursosUsados.push(recursoSlack);
 
-                    filas.push([ t.id + "_slack", "Margen (" + t.slack + "d)", recursoSlack, fechaFinOriginal, fechaFinConMargen, null, 0, t.id ]);
+                    // LA MAGIA: Pasamos null a las fechas y calculamos la duración en milisegundos.
+                    // Google lo acoplará perfectamente a t.id gracias a la dependencia de la columna 8.
+                    const duracionMilisegundos = t.slack * 24 * 60 * 60 * 1000;
+                    filas.push([ t.id + "_slack", "Margen (" + t.slack + "d)", recursoSlack, null, null, duracionMilisegundos, 0, t.id ]);
                 }
             });
 
@@ -273,17 +279,19 @@
             const paletaDinamica = recursosUsados.map(r => mapaColores[r] ? mapaColores[r].color : '#333');
             const options = { height: 500, gantt: { trackHeight: 30, palette: paletaDinamica } };
             
-            ganttChartObj = new google.visualization.Gantt(document.getElementById('gantt_div'));
-            
-            google.visualization.events.addListener(ganttChartObj, 'select', () => {
-                const selection = ganttChartObj.getSelection();
-                if (selection.length > 0) {
-                    let clickedId = chartData.getValue(selection[0].row, 0);
-                    if (clickedId.endsWith('_slack')) clickedId = clickedId.replace('_slack', '');
-                    
-                    abrirModalDetalle(clickedId);
-                }
-            });
+            // Reutilizamos la instancia del gráfico para evitar fugas de memoria y glitches de escala
+            if (!ganttChartObj) {
+                ganttChartObj = new google.visualization.Gantt(document.getElementById('gantt_div'));
+                
+                google.visualization.events.addListener(ganttChartObj, 'select', () => {
+                    const selection = ganttChartObj.getSelection();
+                    if (selection.length > 0) {
+                        let clickedId = chartData.getValue(selection[0].row, 0);
+                        if (clickedId.endsWith('_slack')) clickedId = clickedId.replace('_slack', '');
+                        abrirModalDetalle(clickedId);
+                    }
+                });
+            }
 
             ganttChartObj.draw(chartData, options);
         }
