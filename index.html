@@ -251,7 +251,7 @@
             chartData.addColumn('date', 'Start Date');
             chartData.addColumn('date', 'End Date');
             chartData.addColumn('number', 'Duration');
-            chartData.addColumn('number', 'Percent Complete');
+            chartData.addColumn('number', 'Percent Complete'); // ¡Aquí estaba el problema!
             chartData.addColumn('string', 'Dependencies');
 
             let recursosUsados = [];
@@ -261,20 +261,21 @@
                 const fechaInicio = new Date(t.inicio + "T00:00:00"); 
                 let fechaFinOriginal = new Date(t.fin + "T00:00:00");
                 let duracionPrincipal = null; 
+                let porcentajeCompleto = 0; // Por defecto las tareas nacen en 0% (vacías por dentro)
 
                 if(!recursosUsados.includes(t.prioridad)) recursosUsados.push(t.prioridad);
 
-                // --- FIX DEFINITIVO PARA LOS HITOS (ROMBOS) ---
-                // Le pasamos exactamente la misma fecha a Google y dejamos duración nula.
+                // --- FIX DEFINITIVO: ROMBO VISIBLE ---
                 if (t.inicio === t.fin) {
-                    fechaFinOriginal = new Date(fechaInicio.getTime()); 
-                    duracionPrincipal = null; 
+                    fechaFinOriginal = null; // Anulamos la fecha de fin
+                    duracionPrincipal = 0;   // Duración 0 fuerza el rombo
+                    porcentajeCompleto = 100; // ¡CLAVE! Llenamos el rombo al 100% para que se pinte de color sólido y no sea invisible.
                 }
 
-                filas.push([ t.id, t.nombre, t.prioridad, fechaInicio, fechaFinOriginal, duracionPrincipal, 0, null ]);
+                filas.push([ t.id, t.nombre, t.prioridad, fechaInicio, fechaFinOriginal, duracionPrincipal, porcentajeCompleto, null ]);
 
-                // Lógica del margen
-                if (t.slack > 0) {
+                // Lógica del margen (Evitamos ponerle margen a los hitos)
+                if (t.slack > 0 && t.inicio !== t.fin) {
                     const recursoSlack = t.prioridad + "_slack";
                     if(!recursosUsados.includes(recursoSlack)) recursosUsados.push(recursoSlack);
 
@@ -282,6 +283,27 @@
                     filas.push([ t.id + "_slack", "Margen (" + t.slack + "d)", recursoSlack, null, null, duracionMilisegundos, 0, t.id ]);
                 }
             });
+
+            chartData.addRows(filas);
+
+            const paletaDinamica = recursosUsados.map(r => mapaColores[r] ? mapaColores[r].color : '#333');
+            const options = { height: 500, gantt: { trackHeight: 30, palette: paletaDinamica } };
+            
+            if (!ganttChartObj) {
+                ganttChartObj = new google.visualization.Gantt(document.getElementById('gantt_div'));
+                
+                google.visualization.events.addListener(ganttChartObj, 'select', () => {
+                    const selection = ganttChartObj.getSelection();
+                    if (selection.length > 0) {
+                        let clickedId = chartData.getValue(selection[0].row, 0);
+                        if (clickedId.endsWith('_slack')) clickedId = clickedId.replace('_slack', '');
+                        abrirModalDetalle(clickedId);
+                    }
+                });
+            }
+
+            ganttChartObj.draw(chartData, options);
+        }
 
             chartData.addRows(filas);
 
